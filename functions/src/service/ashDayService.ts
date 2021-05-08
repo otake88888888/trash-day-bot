@@ -9,9 +9,7 @@ import { LineRepository } from "../repository/lineRepository";
 import { AshDay } from "../model/ashDay";
 import { FireStoreRepository } from "../repository/fireStoreRepository";
 import * as queryString from "query-string";
-import * as admin from "firebase-admin";
 
-// TODO: リポジトリにデータアクセス処理を移行する
 @injectable()
 export class AshDayService {
   constructor(
@@ -158,27 +156,26 @@ export class AshDayService {
     const dayIndex = tomorrow.getDay();
     const ashDays = await this.getAshDays(toLineId);
 
-    let body = "";
-
+    let message = "";
     ashDays.forEach((day) => {
-      const isFortnightly = day.fortnightly != 0;
-      if (isFortnightly) {
-        if (this.getDayCount(tomorrow) == day.fortnightly &&
-           day.dayIndex == dayIndex) {
-          body += `明日${day.dayString}曜日は${day.ashType}の収集日です。準備はOKですか？`;
-        }
-      } else {
-        if (day.dayIndex == dayIndex) {
-          body += `明日${day.dayString}曜日は${day.ashType}の収集日です。準備はOKですか？`;
-        }
+      const isAshDay = day.dayIndex === dayIndex;
+      const isEvery = day.fortnightly === 0; // 毎週
+      const isFortnightly = this.getDayCount(tomorrow) === day.fortnightly; // 隔週
+      const appendMessage = () => {
+        message += `明日${day.dayString}曜日は${day.ashType}の収集日です。準備はOKですか？`;
+      };
+
+      if (isAshDay && isEvery) {
+        appendMessage();
+      } else if (isAshDay && isFortnightly) {
+        appendMessage();
       }
     });
 
-    const isAshDay = body ? true : false;
-    if (isAshDay) {
-      this.lineRepository.pushMessage(toLineId, body);
+    if (message) {
+      this.lineRepository.pushMessage(toLineId, message);
     }
-    return body;
+    return message;
   }
 
   async replyMessage(replyTextString: string, events: any): Promise<void> {
@@ -200,30 +197,16 @@ export class AshDayService {
   }
 
   async getUser(userId: string) {
-    const userRef = this.fireStoreRepository.db.collection("users").doc(userId);
-    const userDoc = await userRef.get()
-        .then((doc) => doc)
-        .catch((err) => {
-          throw new Error(err);
-        });
+    const userDoc = this.fireStoreRepository.getUser(userId);
     return userDoc;
   }
 
   async createUser(userId: string) {
-    const userRef = this.fireStoreRepository.db.collection("users").doc(userId);
-    const userDoc = await userRef.get()
-        .then((doc) => doc)
-        .catch((err) => {
-          throw new Error(err);
-        });
-    if (!userDoc.exists) {
-      await userRef.create({});
-    }
+    await this.fireStoreRepository.createUser(userId);
   }
 
   async deleteAshDays(userId: string) {
-    const userRef = this.fireStoreRepository.db.collection("users").doc(userId);
-    await userRef.update({ ashDays: [] });
+    this.fireStoreRepository.deleteAshDays(userId);
   }
 
   async getReplyText(userId: string, receiveMessage: string) {
@@ -270,17 +253,7 @@ export class AshDayService {
         const ashType = parsed["ashType"]?.toString() ?? "";
         const dayIndex: number = +(parsed["dayIndex"]?.toString() ?? "");
         const fortnightly: number = +(parsed["fortnightly"]?.toString() ?? "");
-        const userRef = this.fireStoreRepository
-            .db
-            .collection("users")
-            .doc(userId);
-        await userRef.update({
-          ashDays: admin.firestore.FieldValue.arrayUnion({
-            dayIndex: dayIndex,
-            ashType: ashType,
-            fortnightly: fortnightly,
-          }),
-        });
+        await this.fireStoreRepository.updateUser(userId, dayIndex, ashType, fortnightly);
         const text = "設定しました。ゴミ出しの前日21時に通知します。設定を追加する場合は再度曜日設定を行ってください。";
         this.lineRepository.pushMessage(userId, text);
         break;
